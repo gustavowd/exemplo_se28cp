@@ -19,9 +19,11 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +45,8 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim9;
 DMA_HandleTypeDef hdma_tim1_ch1;
 
+UART_HandleTypeDef huart1;
+
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
 typedef struct led_t_ {
@@ -59,6 +63,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM9_Init(void);
 static void MX_DMA_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
@@ -135,7 +140,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 	}
 }
 
-#define LED_NUMBER	37
+#define LED_NUMBER	64
 uint32_t color_buf[LED_NUMBER];
 uint16_t pwmData[LED_NUMBER][24];
 
@@ -184,6 +189,62 @@ void task3(void *param){
 	vTaskDelayUntil(&last, 20);
   }
 }
+
+
+// Declares a semaphore structure for the UART
+SemaphoreHandle_t sUART;
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart){
+    signed portBASE_TYPE pxHigherPriorityTaskWokenTX = pdFALSE;
+
+    // Call the task that is sending the char
+    xSemaphoreGiveFromISR(sUART, &pxHigherPriorityTaskWokenTX);
+    portYIELD_FROM_ISR(pxHigherPriorityTaskWokenTX);
+}
+
+#include <string.h>
+void task_serial(void *param){
+  /* Infinite loop */
+	int count = 0;
+  char *string = "Teste de porta serial!\n\r";
+
+  sUART = xSemaphoreCreateBinary();
+
+  volatile TickType_t start = xTaskGetTickCount();
+  while (1)
+  {
+	  //HAL_UART_Transmit(&huart1, (uint8_t *)string, strlen(string), 1000);
+
+	  HAL_UART_Transmit_IT(&huart1, (uint8_t *)string, strlen(string));
+      xSemaphoreTake(sUART, portMAX_DELAY);
+	  //vTaskDelay(3);
+
+	  count++;
+
+	  volatile TickType_t stop = xTaskGetTickCount();
+	  if ((stop - start) >= 1000){
+		  start = stop;
+	  }
+  }
+}
+
+volatile int count_leftover = 0;
+void task_cpu_leftover(void *param){
+    TickType_t last;
+    TickType_t frequency = 10;
+    int i = 0;
+    int result = 0;
+
+    last = xTaskGetTickCount();
+
+    while(1){
+        for (i=0; i<1024; i++){
+            result = result ^ i;
+        }
+        vTaskDelayUntil(&last, frequency);
+        count_leftover++;
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -217,6 +278,7 @@ int main(void)
   MX_TIM9_Init();
   MX_DMA_Init();
   MX_TIM1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -239,19 +301,23 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 2, 512);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   static led_t led_t1 = {0, GPIOG, LED_GREEN_Pin, 500};
-  xTaskCreate(task1, "Tarefa 1", 256, &led_t1, 5, NULL);
+  xTaskCreate(task1, "Tarefa 1", 256, &led_t1, 10, NULL);
 
-  //static led_t led_t2 = {0, GPIOG, LED_RED_Pin, 1000};
-  //xTaskCreate(task1, "Tarefa 2", 256, &led_t2, 5, NULL);
+  static led_t led_t2 = {0, GPIOG, LED_RED_Pin, 1000};
+  xTaskCreate(task1, "Tarefa 2", 256, &led_t2, 9, NULL);
 
-  xTaskCreate(task2, "Tarefa 2", 256, NULL, 7, NULL);
+  //xTaskCreate(task2, "Tarefa 2", 256, NULL, 9, NULL);
 
-  xTaskCreate(task3, "Tarefa 3", 256, NULL, 9, NULL);
+  xTaskCreate(task3, "Tarefa 3", 256, NULL, 7, NULL);
+
+  xTaskCreate(task_serial, "Tarefa serial", 256, NULL, 5, NULL);
+
+  xTaskCreate(task_cpu_leftover, "Tarefa sobra cpu", 256, NULL, 1, NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -281,7 +347,7 @@ void SystemClock_Config(void)
   /** Configure the main internal regulator output voltage
   */
   __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -290,16 +356,10 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 180;
+  RCC_OscInitStruct.PLL.PLLN = 72;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLQ = 3;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /** Activate the Over-Drive mode
-  */
-  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
@@ -309,10 +369,10 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -432,6 +492,39 @@ static void MX_TIM9_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -458,8 +551,9 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
@@ -475,7 +569,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+int GetUSB(uint8_t *data);
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -487,11 +581,20 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void const * argument)
 {
+  /* init code for USB_DEVICE */
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 5 */
+  initRTOSObj();
+  uint8_t data[32];
+  uint8_t *string1 = (uint8_t *)"Teste 1\n\r";
+  uint8_t *string2 = (uint8_t *)"Teste 2\n\r";
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	int cnt = GetUSB(data);
+	CDC_Transmit_HS(data, 1);
+	//CDC_Transmit_HS(string1, 9);
+    //osDelay(100);
   }
   /* USER CODE END 5 */
 }
