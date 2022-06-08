@@ -584,17 +584,14 @@ void StartDefaultTask(void const * argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 5 */
-  initRTOSObj();
-  uint8_t data[32];
   uint8_t *string1 = (uint8_t *)"Teste 1\n\r";
   uint8_t *string2 = (uint8_t *)"Teste 2\n\r";
   /* Infinite loop */
   for(;;)
   {
-	int cnt = GetUSB(data);
-	CDC_Transmit_HS(data, 1);
-	//CDC_Transmit_HS(string1, 9);
-    //osDelay(100);
+	CDC_Transmit_HS(string1, 9);
+	CDC_Transmit_HS(string2, 9);
+    osDelay(100);
   }
   /* USER CODE END 5 */
 }

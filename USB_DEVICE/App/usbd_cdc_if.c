@@ -271,17 +271,7 @@ static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
   /* USER CODE BEGIN 11 */
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceHS);
-  signed portBASE_TYPE pxHigherPriorityTaskWokenRX = pdFALSE;
-
   // Call the task that is sending the char
-  //memcpy(buffer, Buf, *Len);
-  if (queue_usb != NULL){
-	  int len = *Len;
-	  for(int i=0;i<len;i++){
-		  xQueueSendToBackFromISR(queue_usb, &Buf[i], &pxHigherPriorityTaskWokenRX);
-	  }
-	  portYIELD_FROM_ISR(pxHigherPriorityTaskWokenRX);
-  }
   return (USBD_OK);
   /* USER CODE END 11 */
 }
@@ -301,14 +291,8 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }
-  if (sem_usb == NULL) {
-	  sem_usb = xSemaphoreCreateBinary();
-	  queue_usb = xQueueCreate(1, 128);
-  }
-
   USBD_CDC_SetTxBuffer(&hUsbDeviceHS, Buf, Len);
   result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
-  xSemaphoreTake(sem_usb, portMAX_DELAY);
   /* USER CODE END 12 */
   return result;
 }
@@ -332,26 +316,12 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
-  signed portBASE_TYPE pxHigherPriorityTaskWokenTX = pdFALSE;
-
-  // Call the task that is sending the char
-  if (sem_usb != NULL){
-	  xSemaphoreGiveFromISR(sem_usb, &pxHigherPriorityTaskWokenTX);
-	  portYIELD_FROM_ISR(pxHigherPriorityTaskWokenTX);
-  }
   /* USER CODE END 14 */
   return result;
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
-void initRTOSObj(void){
-  sem_usb = xSemaphoreCreateBinary();
-  queue_usb = xQueueCreate(128, 1);
-}
-int GetUSB(uint8_t *data){
-	int cnt = xQueueReceive(queue_usb, data, portMAX_DELAY);
-	return cnt;
-}
+
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
