@@ -134,7 +134,17 @@ static int8_t CDC_Receive_HS(uint8_t* pbuf, uint32_t *Len);
 static int8_t CDC_TransmitCplt_HS(uint8_t *pbuf, uint32_t *Len, uint8_t epnum);
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_DECLARATION */
+volatile char buffer[64];
 
+void initRTOSobj(void){
+	sem_usb_tx = xSemaphoreCreateBinary();
+	msg_buf_rx = xMessageBufferCreate(768);
+}
+
+
+uint8_t read_usb_cdc(char *buffer, int buf_len, TickType_t timeout){
+	return xMessageBufferReceive(msg_buf_rx, buffer, buf_len, timeout);
+}
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
 /**
@@ -269,18 +279,6 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
   * @param  Len: Number of data received (in bytes)
   * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAILL
   */
-volatile char buffer[64];
-
-void initRTOSobj(void){
-	sem_usb_tx = xSemaphoreCreateBinary();
-	msg_buf_rx = xMessageBufferCreate(768);
-}
-
-
-uint8_t read_usb_cdc(char *buffer, int buf_len, TickType_t timeout){
-	return xMessageBufferReceive(msg_buf_rx, buffer, buf_len, timeout);
-}
-
 static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 11 */
