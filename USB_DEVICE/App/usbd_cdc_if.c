@@ -26,6 +26,7 @@
 #include "task.h"
 #include "semphr.h"
 #include "queue.h"
+#include "message_buffer.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,8 +53,8 @@
   */
 
 /* USER CODE BEGIN PRIVATE_TYPES */
-SemaphoreHandle_t sem_usb;
-QueueHandle_t queue_usb;
+MessageBufferHandle_t msg_buf_rx;
+SemaphoreHandle_t sem_usb_tx;
 /* USER CODE END PRIVATE_TYPES */
 
 /**
@@ -187,6 +188,8 @@ static int8_t CDC_DeInit_HS(void)
 static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 {
   /* USER CODE BEGIN 10 */
+  portBASE_TYPE yield = pdFALSE;
+  char data = 0;
   switch(cmd)
   {
   case CDC_SEND_ENCAPSULATED_COMMAND:
@@ -235,7 +238,8 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
     break;
 
   case CDC_SET_CONTROL_LINE_STATE:
-
+	  xMessageBufferSendFromISR(msg_buf_rx, &data, 1, &yield);
+	  portYIELD_FROM_ISR(yield);
     break;
 
   case CDC_SEND_BREAK:
@@ -266,11 +270,25 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
   * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAILL
   */
 volatile char buffer[64];
+
+void initRTOSobj(void){
+	sem_usb_tx = xSemaphoreCreateBinary();
+	msg_buf_rx = xMessageBufferCreate(768);
+}
+
+
+uint8_t read_usb_cdc(char *buffer, int buf_len, TickType_t timeout){
+	return xMessageBufferReceive(msg_buf_rx, buffer, buf_len, timeout);
+}
+
 static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 11 */
+  portBASE_TYPE yield = pdFALSE;
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceHS);
+  xMessageBufferSendFromISR(msg_buf_rx, Buf, *Len, &yield);
+  portYIELD_FROM_ISR(yield);
   // Call the task that is sending the char
   return (USBD_OK);
   /* USER CODE END 11 */
@@ -293,6 +311,7 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
   }
   USBD_CDC_SetTxBuffer(&hUsbDeviceHS, Buf, Len);
   result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
+  xSemaphoreTake(sem_usb_tx, portMAX_DELAY);
   /* USER CODE END 12 */
   return result;
 }
@@ -313,9 +332,12 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 {
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 14 */
+  portBASE_TYPE yield = pdFALSE;
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  xSemaphoreGiveFromISR(sem_usb_tx, &yield);
+  portYIELD_FROM_ISR(yield);
   /* USER CODE END 14 */
   return result;
 }
